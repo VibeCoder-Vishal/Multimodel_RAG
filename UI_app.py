@@ -15,6 +15,11 @@ from chromadb.utils.data_loaders import ImageLoader
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.output_parsers import StrOutputParser
 import time
+import pyaudio
+import wave
+import numpy as np
+import threading
+from faster_whisper import WhisperModel
 
 # Page config
 st.set_page_config(
@@ -108,6 +113,11 @@ st.markdown("""
         border-color: #2563EB;
     }
     
+    /* Audio recording button styling */
+    .recording-button {
+        background-color: #DC2626 !important;
+    }
+    
     /* Adjust the caption container */
     .css-1kyxreq {
         margin-top: 5px;
@@ -121,6 +131,95 @@ warnings.filterwarnings("ignore")
 
 # App title
 st.markdown("<h1 class='main-header'>E-Commerce Application System</h1>", unsafe_allow_html=True)
+
+# Audio Transcription Class
+class LiveAudioTranscriber:
+    def __init__(self, model_size="medium", device="auto"):
+        # Audio recording parameters
+        self.format = pyaudio.paInt16
+        self.channels = 1
+        self.rate = 16000
+        self.chunk = 1024
+        self.recording = False
+        self.frames = []
+        
+        # Initialize PyAudio
+        self.audio = pyaudio.PyAudio()
+        
+        # Initialize Whisper model
+        self.model = WhisperModel(model_size, device=device)
+        
+        # Temporary file path
+        self.temp_file = "temp_recording.wav"
+    
+    def start_recording(self):
+        """Start recording audio from microphone"""
+        self.recording = True
+        self.frames = []
+        
+        # Open audio stream
+        self.stream = self.audio.open(
+            format=self.format,
+            channels=self.channels,
+            rate=self.rate,
+            input=True,
+            frames_per_buffer=self.chunk
+        )
+        
+        # Start recording thread
+        self.record_thread = threading.Thread(target=self._record)
+        self.record_thread.start()
+    
+    def _record(self):
+        """Record audio in a separate thread"""
+        while self.recording:
+            data = self.stream.read(self.chunk)
+            self.frames.append(data)
+    
+    def stop_recording(self):
+        """Stop recording and transcribe the audio"""
+        if not self.recording:
+            return "Not currently recording."
+        
+        self.recording = False
+        self.record_thread.join()
+        
+        # Close and terminate audio stream
+        self.stream.stop_stream()
+        self.stream.close()
+        
+        # Save recording to temporary file
+        self._save_audio()
+        
+        # Transcribe the audio
+        result = self._transcribe()
+        
+        # Clean up temporary file
+        if os.path.exists(self.temp_file):
+            os.remove(self.temp_file)
+        
+        return result
+    
+    def _save_audio(self):
+        """Save recorded audio to a WAV file"""
+        wf = wave.open(self.temp_file, 'wb')
+        wf.setnchannels(self.channels)
+        wf.setsampwidth(self.audio.get_sample_size(self.format))
+        wf.setframerate(self.rate)
+        wf.writeframes(b''.join(self.frames))
+        wf.close()
+    
+    def _transcribe(self):
+        """Transcribe the recorded audio using Faster Whisper"""
+        segments, info = self.model.transcribe(self.temp_file, beam_size=5)
+        
+        # Collect transcription text
+        text = " ".join([segment.text for segment in segments])
+        return text
+    
+    def close(self):
+        """Clean up resources"""
+        self.audio.terminate()
 
 # Initialization function
 @st.cache_resource
@@ -148,6 +247,11 @@ def initialize_databases():
 
 # Initialize connections
 mongo_collection, chroma_collection, dataset_folder = initialize_databases()
+
+# Initialize audio transcriber in session state if not already there
+if 'transcriber' not in st.session_state:
+    st.session_state.transcriber = LiveAudioTranscriber(model_size="medium")
+    st.session_state.recording = False
 
 # Functions for data processing
 def download_image(url, save_path):
@@ -380,6 +484,20 @@ def preprocess_image_for_display(image_path):
         st.error(f"Error processing image: {e}")
         return Image.open(image_path)  # Return original if processing fails
 
+# Function to start recording
+def start_recording():
+    st.session_state.recording = True
+    st.session_state.transcriber.start_recording()
+    st.rerun()
+
+# Function to stop recording
+def stop_recording():
+    st.session_state.recording = False
+    transcribed_text = st.session_state.transcriber.stop_recording()
+    # Set the transcribed text as the query
+    st.session_state.query_input = transcribed_text
+    st.rerun()
+
 # App workflow
 with st.sidebar:
     st.markdown("<h2 class='sub-header'>System Status</h2>", unsafe_allow_html=True)
@@ -405,14 +523,34 @@ with st.sidebar:
     st.markdown("- Database: MongoDB + ChromaDB")
     st.markdown("- AI Model: Gemini 1.5 Flash")
     st.markdown("- Image Embedding: OpenCLIP")
+    st.markdown("- Audio: Faster Whisper")
 
 # Main app area
-query = st.text_input("What kind of stamps are you interested in?", key="query_input")
+st.markdown("<h2 class='sub-header'>Search for Stamps</h2>", unsafe_allow_html=True)
 
-# Create a column layout for the button
-col1, col2, col3 = st.columns([3, 1, 3])
+# Add text input with previous transcription if available
+if 'query_input' not in st.session_state:
+    st.session_state.query_input = ""
+
+query = st.text_input("What kind of stamps are you interested in?", value=st.session_state.query_input, key="query_input")
+
+# Create a layout for the input options
+col1, col2, col3, col4 = st.columns([2, 1, 1, 2])
+
 with col2:
+    # Create a button to start/stop recording
+    if not st.session_state.recording:
+        st.button("🎤 Voice Search", on_click=start_recording, use_container_width=True)
+    else:
+        st.button("⏹️ Stop Recording", on_click=stop_recording, use_container_width=True, 
+                 help="Stop recording and transcribe")
+
+with col3:
     search_button = st.button("🔍 Search", use_container_width=True)
+
+# Display recording status
+if st.session_state.recording:
+    st.info("🎙️ Recording... Speak clearly and then click 'Stop Recording' when finished.")
 
 # Process user query
 if search_button and query:
@@ -459,7 +597,19 @@ if search_button and query:
     else:
         st.error("Not enough relevant images found. Please try a different query.")
 elif search_button:
-    st.warning("Please enter a query to search for stamps.")
+    st.warning("Please enter a query or use voice search to find stamps.")
+
+# Handle app close
+def on_close():
+    if 'transcriber' in st.session_state:
+        st.session_state.transcriber.close()
+
+# Register the on_close function to be called when the app is closed
+try:
+    # This is a workaround as Streamlit doesn't have a built-in on_close event
+    st.cache_resource.clear()
+except:
+    pass
 
 # Footer
 st.markdown("---")
