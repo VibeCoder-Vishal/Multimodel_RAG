@@ -153,7 +153,6 @@ class LiveAudioTranscriber:
         self.temp_file = "temp_recording.wav"
     
     def start_recording(self):
-        """Start recording audio from microphone"""
         self.recording = True
         self.frames = []
         
@@ -171,13 +170,11 @@ class LiveAudioTranscriber:
         self.record_thread.start()
     
     def _record(self):
-        """Record audio in a separate thread"""
         while self.recording:
             data = self.stream.read(self.chunk)
             self.frames.append(data)
     
     def stop_recording(self):
-        """Stop recording and transcribe the audio"""
         if not self.recording:
             return "Not currently recording."
         
@@ -201,7 +198,6 @@ class LiveAudioTranscriber:
         return result
     
     def _save_audio(self):
-        """Save recorded audio to a WAV file"""
         wf = wave.open(self.temp_file, 'wb')
         wf.setnchannels(self.channels)
         wf.setsampwidth(self.audio.get_sample_size(self.format))
@@ -210,7 +206,6 @@ class LiveAudioTranscriber:
         wf.close()
     
     def _transcribe(self):
-        """Transcribe the recorded audio using Faster Whisper"""
         segments, info = self.model.transcribe(self.temp_file, beam_size=5)
         
         # Collect transcription text
@@ -520,13 +515,11 @@ with st.sidebar:
     
     # Show system information
     st.markdown("### System Information")
+    st.markdown("- Application: Streamlit + Python")
     st.markdown("- Database: MongoDB + ChromaDB")
-    st.markdown("- AI Model: Gemini 1.5 Flash")
+    st.markdown("- GEN AI Model: Gemini")
     st.markdown("- Image Embedding: OpenCLIP")
-    st.markdown("- Audio: Faster Whisper")
-
-# Main app area
-st.markdown("<h2 class='sub-header'>Search for Stamps</h2>", unsafe_allow_html=True)
+    st.markdown("- Audio: OpenAI Whisper")
 
 # Add text input with previous transcription if available
 if 'query_input' not in st.session_state:
